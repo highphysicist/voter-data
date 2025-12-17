@@ -29,11 +29,10 @@ def create_collective_files_from_voter_json(voter_json_path: str, header_mapping
 
     # Get the cards data
     cards_data = voter_data.get('cards', {})
-    header_to_pages = header_mapping.get('header_to_pages', {})
     page_assignments = header_mapping.get('page_assignments', {})
 
     print(f"📊 Found {len(cards_data)} pages with card data")
-    print(f"📊 Found {len(header_to_pages)} unique headers")
+
 
     # Organize cards by collective
     collective_cards = defaultdict(lambda: defaultdict(list))
@@ -196,7 +195,7 @@ def generate_collective_summary(analysis_result, output_dir: str = "collectives"
 
 # Main execution
 if __name__ == "__main__":
-    VOTER_JSON_PATH = "voter_data_master.json"
+    VOTER_JSON_PATH = "voter_data_master_final_139.json"
     HEADER_MAPPING_PATH = "comprehensive_header_mapping.json"
 
     print("🚀 CREATING COLLECTIVE FILES")
