@@ -41,7 +41,7 @@ def extract_gender_from_card(card):
         textbox = textbox.strip()
 
         # Exact matches for gender indicators
-        if textbox == 'पम':  # Exact match for garbled "पुरुष" (Male)
+        if textbox == 'पन':  # Exact match for garbled "पुरुष" (Male)
             return 'Male'
         elif textbox == 'सद':  # Exact match for garbled "स्त्री" (Female)
             return 'Female'
@@ -298,6 +298,58 @@ def debug_age_detection(collective_files, sample_collective="1"):
             st.sidebar.write("---")
 
 
+def extract_age_gender_pairs(collective_data):
+    """
+    Returns list of dicts with age & gender together
+    """
+    rows = []
+
+    for page_num, cards in collective_data['pages'].items():
+        for card in cards:
+            age = extract_age_from_card(card)
+            gender = extract_gender_from_card(card)
+
+            if age is not None:
+                rows.append({
+                    "Age": age,
+                    "Gender": gender
+                })
+
+    return pd.DataFrame(rows)
+
+
+def filter_ages(ages, min_age=None, max_age=None):
+    """
+    Filter ages based on optional min/max bounds
+    """
+    filtered = ages
+    if min_age is not None:
+        filtered = [a for a in filtered if a >= min_age]
+    if max_age is not None:
+        filtered = [a for a in filtered if a <= max_age]
+    return filtered
+
+def aggregate_collective_data(collective_files, collective_ids):
+    """
+    Combine multiple collectives into a single synthetic collective
+    """
+    combined = {"pages": {}}
+    page_counter = 0
+
+    for cid in collective_ids:
+        for _, cards in collective_files[cid]["pages"].items():
+            combined["pages"][str(page_counter)] = cards
+            page_counter += 1
+
+    return combined
+
+
+def aggregate_metadata(collective_metadata, collective_ids):
+    return {
+        "pages": sum((collective_metadata[c]["pages"] for c in collective_ids), []),
+        "total_voters": sum(collective_metadata[c]["total_voters"] for c in collective_ids)
+    }
+
 def main():
     """
     Main Streamlit dashboard with multiple tabs
@@ -336,14 +388,39 @@ def main():
 
     # Collective selector
     collective_numbers = sorted(collective_files.keys(), key=lambda x: int(x))
-    selected_collective = st.sidebar.selectbox(
-        "Select Collective:",
-        collective_numbers,
-        format_func=lambda x: f"Collective {x}"
+    st.sidebar.markdown("### 🧩 Collective Selection")
+
+    collective_options = ["All"] + collective_numbers
+
+    selected_collectives = st.sidebar.multiselect(
+        "Select Collectives:",
+        options=collective_options,
+        default=["All"]
+    )
+
+    if "All" in selected_collectives:
+        active_collectives = collective_numbers
+    else:
+        active_collectives = selected_collectives
+
+    active_collective_data = aggregate_collective_data(
+        collective_files,
+        active_collectives
+    )
+
+    active_metadata = aggregate_metadata(
+        collective_metadata,
+        active_collectives
+    )
+
+    collective_label = (
+        "All Collectives"
+        if active_collectives == collective_numbers
+        else f"Collectives: {', '.join(active_collectives)}"
     )
 
     # Debug sections
-    debug_age_detection(collective_files, selected_collective)
+    # debug_age_detection(collective_files, active_collectives)
 
     # Display total statistics in sidebar
     st.sidebar.markdown("---")
@@ -357,18 +434,23 @@ def main():
                       f"{(age_stats['total_success'] / (age_stats['total_success'] + age_stats['total_failed']) * 100):.1f}%")
 
     # Create tabs
-    tab1, tab2 = st.tabs(["🎭 Gender Analysis", "📅 Age Analysis"])
+
+    tab1, tab2, tab3 = st.tabs([
+        "🎭 Gender Analysis",
+        "📅 Age Analysis",
+        "👥 Age + Gender Analysis"
+    ])
 
     with tab1:
         # Gender Analysis Tab
         col1, col2 = st.columns([2, 1])
 
         with col1:
-            st.subheader(f"Collective {selected_collective} - Gender Analysis")
+            st.subheader(f"{collective_label} - Gender Analysis")
 
             # Get collective metadata
-            metadata = collective_metadata[selected_collective]
-            collective_data = collective_files[selected_collective]
+            metadata = active_metadata
+            collective_data = active_collective_data
 
             # Display collective info
             st.write(f"**Pages:** {metadata['pages']}")
@@ -378,7 +460,7 @@ def main():
             gender_counts, total_voters = analyze_gender_distribution(collective_data)
 
             # Create and display pie chart
-            fig = create_gender_pie_chart(gender_counts, selected_collective)
+            fig = create_gender_pie_chart(gender_counts, collective_label)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -388,7 +470,7 @@ def main():
             st.subheader("Gender Distribution Table")
 
             # Create and display table
-            table_df = create_gender_table(gender_counts, selected_collective)
+            table_df = create_gender_table(gender_counts, collective_label)
             if table_df is not None:
                 st.dataframe(table_df, use_container_width=True)
 
@@ -411,11 +493,11 @@ def main():
         col1, col2 = st.columns([2, 1])
 
         with col1:
-            st.subheader(f"Collective {selected_collective} - Age Analysis")
+            st.subheader(f"{collective_label} - Age Analysis")
 
             # Get collective metadata
-            metadata = collective_metadata[selected_collective]
-            collective_data = collective_files[selected_collective]
+            metadata = active_metadata
+            collective_data = active_collective_data
 
             # Analyze age distribution for selected collective
             ages, age_stats_collective = analyze_age_distribution(collective_data)
@@ -425,23 +507,44 @@ def main():
                 f"**Age Samples:** {len(ages)} / {age_stats_collective['success'] + age_stats_collective['failed']} "
                 f"({(age_stats_collective['success'] / (age_stats_collective['success'] + age_stats_collective['failed']) * 100):.1f}% success rate)")
 
-            if ages:
+            # ---- Age Filters ----
+            st.markdown("### 🔎 Age Filters")
+
+            min_age = st.number_input(
+                "Age ≥",
+                min_value=0,
+                max_value=120,
+                value=0,
+                step=1
+            )
+
+            max_age = st.number_input(
+                "Age ≤",
+                min_value=0,
+                max_value=120,
+                value=120,
+                step=1
+            )
+
+            filtered_ages = filter_ages(ages, min_age=min_age, max_age=max_age)
+
+            if filtered_ages:
                 # Create and display age histogram
-                hist_fig = create_age_histogram(ages, selected_collective)
+                hist_fig = create_age_histogram(filtered_ages, collective_label)
                 st.plotly_chart(hist_fig, use_container_width=True)
 
                 # Create and display box plot
-                box_fig = create_age_box_plot(ages, selected_collective)
+                box_fig = create_age_box_plot(filtered_ages, collective_label)
                 st.plotly_chart(box_fig, use_container_width=True)
             else:
-                st.warning("No age data available for this collective")
+                st.warning("No age data available for this query")
 
         with col2:
             st.subheader("Age Statistics")
 
             if ages:
                 # Create and display age statistics table
-                stats_table = create_age_statistics_table(ages, selected_collective)
+                stats_table = create_age_statistics_table(ages, collective_label)
                 st.dataframe(stats_table, use_container_width=True)
 
                 # Display key metrics
@@ -450,6 +553,67 @@ def main():
                 st.metric("Age Range", f"{np.min(ages)} - {np.max(ages)}")
             else:
                 st.info("No age statistics available")
+
+    with tab3:
+        st.subheader(f"{collective_label} - Age & Gender Analysis")
+
+        df_ag = extract_age_gender_pairs(active_collective_data)
+
+        if df_ag.empty:
+            st.warning("No combined age & gender data youavailable")
+        else:
+            # ---- Filters ----
+            st.markdown("### 🔎 Filters")
+
+            selected_genders = st.multiselect(
+                "Gender",
+                options=sorted(df_ag["Gender"].unique()),
+                default=list(df_ag["Gender"].unique())
+            )
+
+            min_age = st.slider("Minimum Age", 0, 120, 0)
+            max_age = st.slider("Maximum Age", 0, 120, 120)
+
+            df_filtered = df_ag[
+                (df_ag["Gender"].isin(selected_genders)) &
+                (df_ag["Age"] >= min_age) &
+                (df_ag["Age"] <= max_age)
+                ]
+
+            # ---- Visualizations ----
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### Age Distribution by Gender")
+                fig_hist = px.histogram(
+                    df_filtered,
+                    x="Age",
+                    color="Gender",
+                    barmode="overlay",
+                    nbins=20
+                )
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+            with col2:
+                st.markdown("#### Age Statistics by Gender")
+                fig_box = px.box(
+                    df_filtered,
+                    x="Gender",
+                    y="Age"
+                )
+                st.plotly_chart(fig_box, use_container_width=True)
+
+            # ---- Table ----
+            st.markdown("### 📋 Filtered Data Summary")
+            summary = (
+                df_filtered
+                .groupby("Gender")["Age"]
+                .agg(["count", "mean", "median", "min", "max"])
+                .round(1)
+                .reset_index()
+            )
+
+            st.dataframe(summary, use_container_width=True)
 
     # Collective comparison section (across both tabs)
     st.markdown("---")

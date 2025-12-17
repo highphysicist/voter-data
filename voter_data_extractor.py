@@ -316,9 +316,9 @@ def save_master_json(master_data: Dict[str, Any], output_file: str):
 
 # Main execution for entire PDF
 if __name__ == "__main__":
-    PDF_PATH = "DraftList_Ward_139.pdf"
-    START_PAGE = 9  # Page 9 (1-based indexing)
-    END_PAGE = 4086  # Page 4086 (1-based indexing) - second last page
+    PDF_PATH = "FinalList_Ward_139.pdf"
+    START_PAGE = 10  #
+    END_PAGE = 4115  #
 
     print("🚀 Starting complete PDF processing...")
 
