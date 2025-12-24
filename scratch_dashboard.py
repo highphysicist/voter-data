@@ -29,6 +29,40 @@ def load_collective_data(collectives_dir: str = "collectives"):
 
     return collective_files, collective_metadata
 
+# ---------------- Religion Classification ---------------- #
+
+MUSLIM_TOKENS = {
+    "अहमद", "अहमदद",
+    "मगहम", "महमद", "महम",
+    "अबद", "अबदन",
+    "शचख", "शेख",
+    "सययद", "सयद",
+    "खभन", "खान",
+    "फभरक", "शबभन",
+    "अकबभप", "मगहममद",
+    "नपरमगहममद", "अपद अहमद",
+    "तमयभ", "हनसचन",
+    "आतरफ", "सपभउददन"
+}
+
+def normalize_text(text):
+    text = text.lower()
+    text = re.sub(r"[^\u0900-\u097f a-z]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+def extract_religion_from_card(card):
+    """
+    Classify card as Muslim / Non-Muslim using robust token matching
+    """
+    raw_content = card.get("raw_content", [])
+    joined = normalize_text(" ".join(raw_content))
+
+    for tok in MUSLIM_TOKENS:
+        if tok in joined:
+            return "Muslim"
+
+    return "Non-Muslim"
 
 def extract_gender_from_card(card):
     """
@@ -89,6 +123,15 @@ def extract_age_from_card(card):
 
     return None  # Age not found
 
+def analyze_religion_distribution(collective_data):
+    counts = {"Muslim": 0, "Non-Muslim": 0}
+
+    for _, cards in collective_data["pages"].items():
+        for card in cards:
+            religion = extract_religion_from_card(card)
+            counts[religion] += 1
+
+    return counts
 
 def analyze_gender_distribution(collective_data):
     """
@@ -298,24 +341,27 @@ def debug_age_detection(collective_files, sample_collective="1"):
             st.sidebar.write("---")
 
 
-def extract_age_gender_pairs(collective_data):
+def extract_age_gender_religion_pairs(collective_data):
     """
-    Returns list of dicts with age & gender together
+    Returns DataFrame with Age, Gender, Religion
     """
     rows = []
 
-    for page_num, cards in collective_data['pages'].items():
+    for _, cards in collective_data["pages"].items():
         for card in cards:
             age = extract_age_from_card(card)
             gender = extract_gender_from_card(card)
+            religion = extract_religion_from_card(card)
 
             if age is not None:
                 rows.append({
                     "Age": age,
-                    "Gender": gender
+                    "Gender": gender,
+                    "Religion": religion
                 })
 
     return pd.DataFrame(rows)
+
 
 
 def filter_ages(ages, min_age=None, max_age=None):
@@ -435,10 +481,11 @@ def main():
 
     # Create tabs
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "🎭 Gender Analysis",
         "📅 Age Analysis",
-        "👥 Age + Gender Analysis"
+        "🕌 Religion",
+        "👥 Age + Gender + Religion"
     ])
 
     with tab1:
@@ -555,67 +602,104 @@ def main():
                 st.info("No age statistics available")
 
     with tab3:
-        st.subheader(f"{collective_label} - Age & Gender Analysis")
+        st.subheader(f"{collective_label} - Religion Distribution")
 
-        df_ag = extract_age_gender_pairs(active_collective_data)
+        religion_counts = analyze_religion_distribution(active_collective_data)
 
-        if df_ag.empty:
-            st.warning("No combined age & gender data youavailable")
+        df_rel = pd.DataFrame([
+            {"Religion": k, "Count": v}
+            for k, v in religion_counts.items()
+        ])
+
+        fig = px.pie(
+            df_rel,
+            names="Religion",
+            values="Count",
+            title=f"Religion Distribution - {collective_label}",
+            color="Religion",
+            color_discrete_map={
+                "Muslim": "#d62728",
+                "Non-Muslim": "#1f77b4"
+            }
+        )
+
+        fig.update_traces(textinfo="percent+label")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.dataframe(df_rel, use_container_width=True)
+
+        st.caption(
+            "⚠️ Religion classification is probabilistic and intended for aggregate analysis only."
+        )
+
+    with tab4:
+        st.subheader(f"{collective_label} - Age + Gender + Religion Analysis")
+
+        df_agr = extract_age_gender_religion_pairs(active_collective_data)
+
+        if df_agr.empty:
+            st.warning("No combined age, gender & religion data available")
         else:
-            # ---- Filters ----
             st.markdown("### 🔎 Filters")
+
+            selected_religions = st.multiselect(
+                "Religion",
+                options=sorted(df_agr["Religion"].unique()),
+                default=list(df_agr["Religion"].unique())
+            )
 
             selected_genders = st.multiselect(
                 "Gender",
-                options=sorted(df_ag["Gender"].unique()),
-                default=list(df_ag["Gender"].unique())
+                options=sorted(df_agr["Gender"].unique()),
+                default=list(df_agr["Gender"].unique())
             )
 
-            min_age = st.slider("Minimum Age", 0, 120, 0)
-            max_age = st.slider("Maximum Age", 0, 120, 120)
+            min_age, max_age = st.slider(
+                "Age Range",
+                0, 120, (0, 120)
+            )
 
-            df_filtered = df_ag[
-                (df_ag["Gender"].isin(selected_genders)) &
-                (df_ag["Age"] >= min_age) &
-                (df_ag["Age"] <= max_age)
+            df_filtered = df_agr[
+                (df_agr["Religion"].isin(selected_religions)) &
+                (df_agr["Gender"].isin(selected_genders)) &
+                (df_agr["Age"] >= min_age) &
+                (df_agr["Age"] <= max_age)
                 ]
 
-            # ---- Visualizations ----
             col1, col2 = st.columns(2)
 
             with col1:
-                st.markdown("#### Age Distribution by Gender")
                 fig_hist = px.histogram(
                     df_filtered,
                     x="Age",
                     color="Gender",
-                    barmode="overlay",
-                    nbins=20
+                    nbins=20,
+                    title="Age Distribution"
                 )
                 st.plotly_chart(fig_hist, use_container_width=True)
 
             with col2:
-                st.markdown("#### Age Statistics by Gender")
                 fig_box = px.box(
                     df_filtered,
                     x="Gender",
-                    y="Age"
+                    y="Age",
+                    color="Religion",
+                    title="Age Statistics"
                 )
                 st.plotly_chart(fig_box, use_container_width=True)
 
-            # ---- Table ----
-            st.markdown("### 📋 Filtered Data Summary")
+            st.markdown("### 📋 Summary")
             summary = (
                 df_filtered
-                .groupby("Gender")["Age"]
-                .agg(["count", "mean", "median", "min", "max"])
+                .groupby(["Religion", "Gender"])["Age"]
+                .agg(["count", "mean", "median"])
                 .round(1)
                 .reset_index()
             )
 
             st.dataframe(summary, use_container_width=True)
 
-    # Collective comparison section (across both tabs)
+    # Collective comparison section (across all tabs)
     st.markdown("---")
     st.subheader("📊 Collective Comparison")
 
